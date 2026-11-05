@@ -101,6 +101,9 @@ constexpr unsigned kPonBlocks = 4;                    // PM6350@0, PM7250B@2, PM
 constexpr unsigned kGpioBlocks = 48;
 constexpr unsigned kPollMs = 16;
 constexpr unsigned kSettle = 6;                       // equal samples in a row before a level is believed
+// The volume-up line must rest released this long before a press is believed. Boot 12 held the pin low for whole
+// seconds while nothing touched it, so a press is only counted after the line has been seen high and quiet.
+constexpr unsigned kReleaseSamples = 18;              // about 300 ms at kPollMs
 
 struct Input {
     uint32_t channel;
@@ -109,6 +112,13 @@ struct Input {
     uint8_t  last;
     unsigned steady;
     bool     live;
+    // Volume-up is the only key read as a plain GPIO level, so its level bit is debounced on its own: the rest of
+    // the byte moves on this block and used to reset the counter that keeps a press from being believed.
+    uint8_t  levelLast;     // last raw level bit, 1 = released (the line is pulled up)
+    unsigned levelSteady;   // equal level bits in a row
+    unsigned levelHigh;     // consecutive released samples, capped at kReleaseSamples
+    bool     levelKnown;
+    bool     down;          // the debounced, published state of this pin
 };
 
 struct State {
@@ -338,26 +348,45 @@ void poll() {
                changedBaseline, static_cast<unsigned>(changedStatus ^ changedBaseline));
 
     // Volume up: the only key on these PMICs that is a plain pulled-up GPIO. It reads low when pressed. Only the
-    // level bit may differ from the released byte: boot 12 showed one block whose status flipped 0x81 -> 0x80
-    // several times a second while nothing was pressed, and any wider difference is a decode artefact, not a key.
-    bool up = false;
-    unsigned upChannel = 0;
+    // level bit is believed: boot 12 showed one block whose status flipped 0x81 -> 0x80 several times a second
+    // while nothing was pressed, and any wider difference is a decode artefact, not a key. That block also sat low
+    // for whole seconds at a time, which the old "differs from the released byte" test took for a held key and
+    // turned into 6586 presses in 14 minutes, so a press now needs a line that has first rested released.
+    bool down = false;
     for (unsigned i = 0; i < g.gpioCount; ++i) {
         Input &in = g.gpio[i];
         if (!readByte(in.channel, kRegGpioStatus, &value)) continue;
-        sample(in, value);
-        const uint8_t diff = static_cast<uint8_t>(value ^ in.baseline);
-        if (in.steady >= kSettle && (diff & 0xfe) == 0 && (value & 0x01) == 0 && (in.baseline & 0x01) != 0) {
-            up = true;
-            upChannel = in.channel;
-            gVolumeUpChannel = in.channel;
+        const uint8_t level = value & 0x01;  // the pin's own level; bit 7 and the rest are not the key
+        if (!in.levelKnown) {
+            in.levelKnown = true;
+            in.levelLast = level;
+            in.levelSteady = 0;
+            continue;
         }
+        if (level == in.levelLast) {
+            if (in.levelSteady < kSettle) ++in.levelSteady;
+        } else {
+            in.levelSteady = 0;
+            in.levelLast = level;
+            continue;
+        }
+        if (in.levelSteady < kSettle) continue;  // the bit has not held long enough to be believed
+        if (level != 0) {                        // released: the line rests high through its pull-up
+            if (in.levelHigh < kReleaseSamples) ++in.levelHigh;
+            in.down = false;
+        } else if (in.levelHigh >= kReleaseSamples) {
+            in.down = true;                      // a real press: the line was released and is now held low
+            in.levelHigh = 0;
+            gVolumeUpChannel = in.channel;
+        } else {
+            in.levelHigh = 0;                    // too short a rest: a decode artefact, not a key
+        }
+        if (in.down) down = true;
     }
-    if (up != gVolumeUpDown) {
-        gVolumeUpDown = up;
+    if (down != gVolumeUpDown) {
+        gVolumeUpDown = down;
         ++g.presses[2];
-        printf("PICASSO_BTN volume-up %s channel=%u\n", up ? "PRESSED" : "released",
-               up ? upChannel : gVolumeUpChannel);
+        printf("PICASSO_BTN volume-up %s channel=%u\n", down ? "PRESSED" : "released", gVolumeUpChannel);
     }
     publish();
 }

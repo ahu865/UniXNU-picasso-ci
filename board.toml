@@ -236,9 +236,11 @@ kernel_args = [
   # Request the top CPU frequency row; hardware limits still apply.
   "armcpu-cpufreq=1",
   "sheng-cpufreq=4",
-  # Apply the Picasso status bar metric in SpringBoard and main app executables.
+  # Apply the Picasso status bar metric in SpringBoard only. Every app main executable used to receive the same
+  # ad-hoc library (picasso_inject_apps=1); AMFI rejects its signature ("unsuitable CT policy"), dyld then fails
+  # the launch, and each of the resprings in boot 12 followed an app that had just been given it. Third-party
+  # status bars keep UIKit's own Pad metrics until the library can be signed for the apps too.
   "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
-  "picasso_inject_apps=1",
   # Permit the library signature for bring-up; keep cs_enforcement_disable unset.
   "amfi_allow_any_signature=1",
   # Reject framebuffer power-off during bring-up; black frames can still be presented.
