@@ -358,7 +358,7 @@ void poll() {
     // while nothing was pressed, and any wider difference is a decode artefact, not a key. That block also sat low
     // for whole seconds at a time, which the old "differs from the released byte" test took for a held key and
     // turned into 6586 presses in 14 minutes, so a press now needs a line that has first rested released.
-    bool down = false;
+    bool up = false;
     for (unsigned i = 0; i < g.gpioCount; ++i) {
         Input &in = g.gpio[i];
         if (!readByte(in.channel, kRegGpioStatus, &value)) continue;
@@ -387,12 +387,12 @@ void poll() {
         } else {
             in.levelHigh = 0;                    // too short a rest: a decode artefact, not a key
         }
-        if (in.down) down = true;
+        if (in.down) up = true;
     }
-    if (down != gVolumeUpDown) {
-        gVolumeUpDown = down;
+    if (up != gVolumeUpDown) {
+        gVolumeUpDown = up;
         ++g.presses[2];
-        printf("PICASSO_BTN volume-up %s channel=%u\n", down ? "PRESSED" : "released", gVolumeUpChannel);
+        printf("PICASSO_BTN volume-up %s channel=%u\n", up ? "PRESSED" : "released", gVolumeUpChannel);
     }
     publish();
 }
