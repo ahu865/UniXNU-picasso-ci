@@ -330,11 +330,23 @@ def build_adreno_picasso(record: dict):
 def build_wlan(record: dict):
     out = ROOT / 'build/native-wlan'
     out.mkdir(parents=True, exist_ok=True)
+    # The WCN3990 WLAN firmware is staged by the CI workflow from the phone's
+    # own modem image and turned into a C array here; without it the probe
+    # reports "no firmware staged" and the build stays deterministic.
+    generator = ROOT / 'scripts/build-wlan-picasso-firmware.py'
+    env = os.environ.copy()
+    env.setdefault('WLAN_FW_OUT', str(out))
+    subprocess.run([sys.executable, str(generator)], check=True, env=env)
     driver = ROOT / 'drivers/NativeWlan'
     objects = []
     for name in ('WlanBoard.cpp', 'WlanProbe.cpp', 'WlanFirmware.c'):
         obj = out / (Path(name).stem + '.o')
         compile_file(driver / name, obj, record, ['-I', str(driver)], is_c=name.endswith('.c'))
+        objects.append(obj)
+    embedded = out / 'wlan_embedded_firmware.c'
+    if embedded.is_file():
+        obj = out / 'wlan_embedded_firmware.o'
+        compile_file(embedded, obj, record, ['-I', str(driver)], is_c=True)
         objects.append(obj)
     archive = out / 'libNativeWlan.a'
     archive.unlink(missing_ok=True)

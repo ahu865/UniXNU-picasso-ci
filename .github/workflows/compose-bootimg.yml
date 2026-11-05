@@ -182,6 +182,19 @@ jobs:
           fetch a620_zap.b01 "$G11/a620_zap.b01"  6712 c1ba5b5e
           fetch a620_zap.b02 "$G11/a620_zap.b02"  1676 b439bc29
 
+      # The WLAN probe's stage 3 parses the device's own WLAN firmware image.
+      # wlanmdsp.mbn lives in the vangogh modem partition (NON-HLOS.bin), which
+      # no public blob repo mirrors, so the file is pinned as a release asset of
+      # this repository (tag picasso-wlan-fw-vangogh-1) and verified here the
+      # same way the GPU set is.
+      - name: Stage WCN3990 WLAN firmware
+        run: |
+          mkdir -p /tmp/picasso-wlan-fw
+          curl --fail --retry 3 --retry-all-errors --connect-timeout 30 \
+            -o /tmp/picasso-wlan-fw/wlanmdsp.mbn \
+            https://github.com/ahu865/UniXNU-picasso-ci/releases/download/picasso-wlan-fw-vangogh-1/wlanmdsp.mbn
+          ADRENO620_FW_DIR=/tmp/picasso-wlan-fw python3 scripts/verify-adreno-fw.py wlanmdsp.mbn 3871128 f9a10c48
+
       - name: Build kernel + payload
         env:
           GITHUB_TOKEN: ${{ github.token }}

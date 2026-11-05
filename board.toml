@@ -240,7 +240,10 @@ kernel_args = [
   # ad-hoc library (picasso_inject_apps=1); AMFI rejects its signature ("unsuitable CT policy"), dyld then fails
   # the launch, and each of the resprings in boot 12 followed an app that had just been given it. Third-party
   # status bars keep UIKit's own Pad metrics until the library can be signed for the apps too.
-  "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
+  # Boot 13 showed the SpringBoard-only form is not clean either: AMFI logged the same rejection at every
+  # SpringBoard start and the board still respring-looped (5 restarts), so the injection is off entirely until
+  # the library carries a signature AMFI accepts; re-enable by restoring the line below.
+  # "picasso_inject_sb=/private/var/picasso/libpicasso-sb.dylib",
   # Permit the library signature for bring-up; keep cs_enforcement_disable unset.
   "amfi_allow_any_signature=1",
   # Reject framebuffer power-off during bring-up; black frames can still be presented.
