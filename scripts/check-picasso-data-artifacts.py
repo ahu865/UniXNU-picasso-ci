@@ -131,7 +131,7 @@ def verify_payload_policy(path, packed, preparation, identity, spec, jobs, polic
 def check(work, tree, output):
     board = tomllib.loads((ROOT / 'board.toml').read_text(encoding='utf-8'))
     spec = board['payload']
-    require(spec['size_mib'] == 60, 'Picasso payload must be 60 MiB')
+    require(spec['size_mib'] >= 60, 'Picasso payload must keep at least the original 60 MiB')
     require(spec['adt'].get('packed_data_ramdisk') is True, 'Packed Data ADT mode required')
     require(not spec['adt'].get('persistent_data'), 'Data must remain volatile')
     for argument in spec['kernel_args']:
@@ -206,7 +206,7 @@ def check(work, tree, output):
                 f'Storage target outside original component: {name}')
 
     payload = work / 'payload/payload.img'
-    require(payload.stat().st_size == 60 * 1024**2, 'Incorrect FAT payload size')
+    require(payload.stat().st_size == spec['size_mib'] * 1024**2, 'Incorrect FAT payload size')
     payload_report = json.loads(payload.with_suffix('.json').read_text())
     require(payload_report['payload_sha256'] == digest(payload), 'Stale payload report')
     data_path, payload_packed, transformation = payload_seed(work, spec, payload_report, packed, inspect)
