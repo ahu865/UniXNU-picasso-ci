@@ -94,6 +94,10 @@ is the process that ends up restarting.
    and only counted after the line has rested released for about 300 ms. Boot 12 counted
    10 204 presses against 52 power presses and 14 volume-down presses in 22 minutes, because
    one GPIO block sat low for seconds at a time (`0x81 -> 0x80` while the key was untouched).
+   The PON path gets the same treatment: a block whose status carries bits outside the two key
+   pairs is no longer believed (boot 12: `status=0f released=04 diff=0b`, every poll, which kept
+   the power key latched down and printed `pon bit outside the key map` thousands of times).
+   That line is now printed four times per boot, not per poll.
 
 ## What the next boot should show
 

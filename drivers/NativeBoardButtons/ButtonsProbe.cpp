@@ -301,22 +301,31 @@ void poll() {
 
     // The power and volume-down keys live on one PON block, but all four PMICs carry one. A bit that departs from
     // its own block's released byte counts, and the result is the union over the blocks: otherwise a PON with no
-    // key wired to it would keep clearing the flags the real one sets.
+    // key wired to it would keep clearing the flags the real one sets. Only the two documented key-bit pairs are
+    // believed: boot 12 had a block report 0x0f against a released 0x04 for minutes on end, which is not a key,
+    // and taking it for one kept the power key down (and the log line below) running every poll.
     uint8_t changed = 0;
     uint16_t changedPpid = 0;
     uint8_t changedStatus = 0, changedBaseline = 0;
+    static unsigned outside;
     for (unsigned i = 0; i < g.ponCount; ++i) {
         Input &in = g.pon[i];
         if (!readByte(in.channel, kRegRtStatus, &value)) continue;
         sample(in, value);
         if (in.steady < kSettle) continue;
         const uint8_t diff = static_cast<uint8_t>(value ^ in.baseline);
-        if (diff != 0) {
-            changed |= diff;
-            changedPpid = in.ppid;
-            changedStatus = value;
-            changedBaseline = in.baseline;
+        if (diff == 0) continue;
+        if ((diff & 0x7cu) != 0) {
+            // Named once per boot so a key wired to an unexpected pin is still visible in the log.
+            if (__atomic_fetch_add(&outside, 1, __ATOMIC_RELAXED) < 4)
+                printf("PICASSO_BTN pon bit outside the key map slave=%u peripheral=%02x status=%02x released=%02x diff=%02x\n",
+                       in.ppid >> 8, in.ppid & 0xff, value, in.baseline, static_cast<unsigned>(diff));
+            continue;
         }
+        changed |= diff;
+        changedPpid = in.ppid;
+        changedStatus = value;
+        changedBaseline = in.baseline;
     }
     // PON real-time status carries one bit per key, set while the key is held. Which bit is which is not portable
     // across the trees that document it: mainline qpnp-power-on uses bit 0 KPDPWR_N / bit 1 RESIN_N, while the
@@ -341,11 +350,8 @@ void poll() {
                static_cast<unsigned>(changedStatus ^ changedBaseline),
                (changedStatus ^ changedBaseline) & 0x02 ? "1" : "6");
     }
-    // Bits above those two pairs: reported once per transition so a key wired to an unexpected pin is named
-    // instead of silently ignored. The inventory line says how many key inputs each PMIC offers.
-    if ((changed & 0x3cu) != 0)
-        printf("PICASSO_BTN pon bit outside the key map status=%02x released=%02x diff=%02x\n", changedStatus,
-               changedBaseline, static_cast<unsigned>(changedStatus ^ changedBaseline));
+    // Bits above those two pairs never reach here; the filter above names them once per boot. The inventory line
+    // says how many key inputs each PMIC offers.
 
     // Volume up: the only key on these PMICs that is a plain pulled-up GPIO. It reads low when pressed. Only the
     // level bit is believed: boot 12 showed one block whose status flipped 0x81 -> 0x80 several times a second
