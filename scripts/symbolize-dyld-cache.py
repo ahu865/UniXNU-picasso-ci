@@ -53,7 +53,8 @@ class Cache:
             return
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         f.close()
-        if mm[:8] not in (b'dyldV1  ', b'dyldV2  '):
+        if mm[:8] != b'dyld_v1 ':
+            # the magic is 16 bytes ("dyld_v1   arm64\0"); the first 8 identify the format
             print(f'skip {path}: first bytes {bytes(mm[:16])!r}', file=sys.stderr)
             mm.close()
             return
