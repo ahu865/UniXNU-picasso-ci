@@ -6,6 +6,32 @@ capture (`boot12-ios7.log`, 20:06 onwards) shows 21 `PICASSO_INJECT SpringBoard 
 lines, and every restart after the first is preceded by an app launch inside the same
 second or two.
 
+Two independent faults feed it: the **512 MiB volatile Data volume runs out of space** while
+the phone is used, and **every app is handed an ad-hoc library that AMFI refuses**. The
+storage fault comes first (it makes every write fail), the injection fault comes second (it
+makes every launch fail), and either one is enough to send SpringBoard back to its boot
+screen.
+
+## The Data volume fills
+
+`NATIVE_OWNER_DATA stage=1 selected=1000005 path=/dev/disk3s1 logical_bytes=536870912`
+(line 500) and `handle_mount:817 ... block count: 131072` (line 511): `/private/var` is a
+512 MiB RAM-backed APFS volume, re-seeded from the boot image at every boot. Writes allocate
+pages lazily, so a bigger logical disk costs nothing until it is written.
+
+In this session it filled in about twenty minutes of use:
+
+```
+line 15633  apfs_lowdisk_check_volume:285: disk3s1 sending lowdisk notification: 8192 ...
+line 21131  fs_tx_enter_internal:27549: disk3s1 biomed: ENOSPC: ttype DELETE num_blocks 6010 free_blocks 3134 ...
+```
+
+`free_blocks` is down to 3134 of 131072 (about 12 MiB). Once that happens an app cannot
+write its caches, cannot be snapshotted, and dies; SpringBoard restarts. The volume is
+volatile, so a reboot restores the free space and the cycle starts again — which is why the
+phone works for a while after each flash and then degrades.
+
+
 ## The sequence
 
 `PICASSO_INJECT <name> started with DYLD_INSERT_LIBRARIES=/private/var/picasso/libpicasso-sb.dylib`
@@ -57,20 +83,27 @@ is the process that ends up restarting.
 
 ## Changes made
 
-1. `board.toml`: `picasso_inject_apps=1` is gone. `picasso_inject_sb` still applies the
+1. `scripts/prepare-picasso-ram-data.py`: the volatile Data volume is 1024 MiB instead of
+   512 MiB (`DATA_BYTES`), with the two artifact checks following the constant instead of
+   repeating the number. The seed is packed by nonzero page, so this does not grow the boot
+   image; it only lets `/private/var` hold more before the lowdisk path is reached.
+2. `board.toml`: `picasso_inject_apps=1` is gone. `picasso_inject_sb` still applies the
    status bar metric to SpringBoard; app status bars fall back to UIKit's own Pad metrics
    until the library can be signed in a way AMFI accepts for an app.
-2. `drivers/NativeBoardButtons/ButtonsProbe.cpp`: volume-up is debounced on its own level bit
+3. `drivers/NativeBoardButtons/ButtonsProbe.cpp`: volume-up is debounced on its own level bit
    and only counted after the line has rested released for about 300 ms. Boot 12 counted
    10 204 presses against 52 power presses and 14 volume-down presses in 22 minutes, because
    one GPIO block sat low for seconds at a time (`0x81 -> 0x80` while the key was untouched).
 
 ## What the next boot should show
 
+* `NATIVE_OWNER_DATA stage=1 ... logical_bytes=1073741824`, and no
+  `apfs_lowdisk_check_volume` or `fs_tx_enter_internal ... ENOSPC` line for the first hour
+  of use;
 * no `PICASSO_INJECT` line for Spotlight, Preferences, PosterBoard, MobileSlideShow,
   ScreenshotServicesService or StoreKitUIService;
 * `PICASSO_BTN alive ... presses=<power>/<volume-down>/<volume-up>` with the third number of
   the same order as the other two, not thousands;
 * fewer, or no, SpringBoard restarts while apps are opened. If restarts continue without an
-  app launch in front of them, the injection was not the only trigger and the faulting frame
-  has to be resolved against the on-device cache.
+  app launch in front of them, neither the injection nor the storage fault was the only
+  trigger and the faulting frame has to be resolved against the on-device cache.

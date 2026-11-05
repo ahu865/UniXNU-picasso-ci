@@ -119,18 +119,19 @@ def main():
     short_raw = out / 'short.cdr'
     short_raw.write_bytes(raw_bytes[:-1])
     rejected('raw size mismatch', lambda: data.inspect_packed(packed, short_raw))
-    empty_data = out / 'empty512.dbrdisk'
-    empty_data.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, page, 512 * 1024**2, 0))
+    empty_data = out / 'empty.dbrdisk'
+    empty_data.write_bytes(struct.pack('<8sIIQQ', b'DBRDISK1', 1, page, data.DATA_BYTES, 0))
 
     def verify_sparse():
         result = data.inspect_packed(empty_data)
         digest = hashlib.sha256()
-        for _ in range(512):
+        for _ in range(data.DATA_BYTES // 1024**2):
             digest.update(bytes(1024**2))
         assert result['logical_bytes'] == data.DATA_BYTES
         assert result['raw_sha256'] == digest.hexdigest()
 
-    passes('512 MiB logical empty disk hashes without dense allocation', verify_sparse)
+    passes(f'{data.DATA_BYTES // 1024**2} MiB logical empty disk hashes without dense allocation',
+           verify_sparse)
 
     # Drive the production artifact checker through its provenance checks with
     # producer-derived metadata. Stop at the real mount boundary: this fixture

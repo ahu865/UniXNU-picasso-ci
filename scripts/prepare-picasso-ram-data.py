@@ -25,7 +25,11 @@ from picasso_target import OS_SHA256, LAUNCHD_SHA256, BUILD
 
 # build81 exhausted APFS transaction headroom in the 256 MiB logical volume.
 # Sparse pages still allocate only on writes; this is not a RAM reservation.
-DATA_BYTES = 512 * 1024**2
+# Boot 12 then ran the 512 MiB volume out of space while the UI was used: 131072 blocks total,
+# free_blocks down to 3119, `apfs_lowdisk_check_volume ... sending lowdisk notification` from line
+# 15633 and `fs_tx_enter_internal ... ENOSPC` from line 21131, after which every app launch failed.
+# The seed is packed by nonzero page, so a larger logical disk does not grow the boot image.
+DATA_BYTES = 1024 * 1024**2
 PAGE = 4096
 MAX_PACKED = 4 * 1024**2
 MAX_LOGICAL = 2 * 1024**3  # Larger disks select the persistent-store driver path.
@@ -436,7 +440,7 @@ def prepare(tree, source, output, config):
     pack(image, packed)
     packed_info = inspect_packed(packed, raw=image)
     if packed_info['logical_bytes'] != DATA_BYTES:
-        raise ValueError('Expected exactly 512 MiB of logical volatile Data')
+        raise ValueError(f'Expected exactly {DATA_BYTES // 1024**2} MiB of logical volatile Data')
     manifest_path = output / 'source-var-manifest.json'
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     files = [entry for entry in manifest.values() if entry['type'] == 'file']
