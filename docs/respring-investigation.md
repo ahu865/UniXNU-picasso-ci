@@ -2,9 +2,9 @@
 
 The user reports the display going black and showing the spinner while operating the phone.
 On this board that is not a display failure: it is SpringBoard being restarted. Boot 12's
-capture (`boot12-ios7.log`, 20:06 onwards) shows 21 `PICASSO_INJECT SpringBoard started`
-lines, and every restart after the first is preceded by an app launch inside the same
-second or two.
+capture (`boot12-ios7.log`, 20:06 to 20:23) shows 26 `PICASSO_INJECT SpringBoard started`
+lines; 17 of the 25 restarts are preceded by an app launch inside the same second or two, and
+the last four come after the Data volume has filled.
 
 Two independent faults feed it: the **512 MiB volatile Data volume runs out of space** while
 the phone is used, and **every app is handed an ad-hoc library that AMFI refuses**. The
@@ -62,11 +62,12 @@ and then a new SpringBoard. The pairs in boot 12:
 | PosterBoard 14419, Preferences 14469 | 15474 | 1005 |
 
 The quiet stretches (419 s to 647 s, 841 s to 1006 s) are the phone sitting idle: the
-restarts cluster exactly where the user opened something. `board.toml` carried
+restarts cluster where the user opened something. `board.toml` carried
 `picasso_inject_apps=1`, so the kernel added that library to **every** app main executable.
 The library is ad-hoc signed; AMFI refuses the signature for an app process, dyld then fails
 the image, and the launch dies. SpringBoard, which is in the middle of the scene transaction,
-is the process that ends up restarting.
+is the process that ends up restarting. The nine restarts without an app launch in front of
+them are the ones the storage fault above explains.
 
 ## Not established
 
