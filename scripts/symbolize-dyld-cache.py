@@ -53,7 +53,8 @@ class Cache:
             return
         mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
         f.close()
-        if mm[:8] != b'dyldV1  ':
+        if mm[:8] not in (b'dyldV1  ', b'dyldV2  '):
+            # not a dyld cache file (DriverKit caches and other payloads reject here)
             mm.close()
             return
         self.files[path] = mm
