@@ -61,3 +61,20 @@ jobs:
         if: always()
         run: |
           for m in /tmp/sys-*; do hdiutil detach "$m" -force || true; done
+
+      - name: Dump cache headers for layout debugging
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, struct, sys
+          def words(path, n=96):
+              d = open(path,'rb').read(n*4)
+              print('==', path, len(open(path,'rb').read()))
+              for i in range(0, n, 8):
+                  row = struct.unpack_from('<8I', d, i*4)
+                  print(f'{i*4:5x}: ' + ' '.join(f'{v:8x}' for v in row))
+          main = [p for p in glob.glob('/tmp/sys-*/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64') if not p.endswith('.symbols')]
+          sym = glob.glob('/tmp/sys-*/System/Library/Caches/com.apple.dyld/dyld_shared_cache_arm64.symbols')
+          if main: words(main[0], 64)
+          if sym: words(sym[0], 96)
+          PY
