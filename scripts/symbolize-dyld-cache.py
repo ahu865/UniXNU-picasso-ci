@@ -65,7 +65,10 @@ class Cache:
             self.maps.append((addr, size, off, path))
 
     def _parse_main_images(self):
-        mm = self.files[self.main]
+        # iOS 16 split caches keep the image list in the .symbols companion file;
+        # the main file's own list is empty there. Fall back to the main file.
+        source = next((p for p in sorted(self.files) if p.endswith('.symbols')), self.main)
+        mm = self.files[source]
         _, _, images_offset, images_count = struct.unpack_from('<IIII', mm, 16)
         images = []
         for i in range(images_count):
