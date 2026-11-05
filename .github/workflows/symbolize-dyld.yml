@@ -53,7 +53,7 @@ jobs:
 
       - name: Resolve the addresses
         run: |
-          CACHE=$(find /tmp/sys-* -name 'dyld_shared_cache_arm64e' -type f | head -1)
+          CACHE=$(find /tmp/sys-* -name 'dyld_shared_cache_arm64' -type f | head -1)
           echo "cache: $CACHE"
           python3 scripts/symbolize-dyld-cache.py "$CACHE" ${{ github.event.inputs.pcs }}
 
