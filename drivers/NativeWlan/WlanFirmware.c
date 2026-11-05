@@ -174,10 +174,13 @@ int wlan_mbn_parse(struct wlan_mbn *out, const uint8_t *data, size_t size) {
         if ((uint64_t)s->offset + s->filesz > size) return WLAN_ERR_INVAL;
     }
     // Payload ranges must not overlap. The hash segment has no file bytes, so it cannot collide.
+    // Overlaps are only rejected between loadable segments: real PIL images nest PT_DYNAMIC and
+    // PT_NOTE inside a PT_LOAD tail (the device's own wlanmdsp.mbn does, and rejecting any pair
+    // made stage 3 fail on the real image), while only PT_LOAD pairs are copied densely to memory.
     for (unsigned i = 0; i < out->segments; ++i) {
-        if (i == out->hash_index || !out->seg[i].filesz) continue;
+        if (i == out->hash_index || !out->seg[i].filesz || out->seg[i].type != 1) continue;
         for (unsigned j = i + 1; j < out->segments; ++j) {
-            if (j == out->hash_index || !out->seg[j].filesz) continue;
+            if (j == out->hash_index || !out->seg[j].filesz || out->seg[j].type != 1) continue;
             const uint64_t ai = out->seg[i].offset, ae = ai + out->seg[i].filesz;
             const uint64_t bi = out->seg[j].offset, be = bi + out->seg[j].filesz;
             if (ai < be && bi < ae) return WLAN_ERR_INVAL;
