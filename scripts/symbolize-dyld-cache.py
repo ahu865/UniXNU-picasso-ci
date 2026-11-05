@@ -59,14 +59,14 @@ class Cache:
             mm.close()
             return
         self.files[path] = mm
-        mapping_offset, mapping_count, _, _ = struct.unpack_from('<IIII', mm, 20)
+        mapping_offset, mapping_count, _, _ = struct.unpack_from('<IIII', mm, 16)
         for i in range(mapping_count):
             addr, size, off = struct.unpack_from('<QQQ', mm, mapping_offset + 32 * i)
             self.maps.append((addr, size, off, path))
 
     def _parse_main_images(self):
         mm = self.files[self.main]
-        _, _, images_offset, images_count = struct.unpack_from('<IIII', mm, 20)
+        _, _, images_offset, images_count = struct.unpack_from('<IIII', mm, 16)
         images = []
         for i in range(images_count):
             base = images_offset + 32 * i
