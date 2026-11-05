@@ -1,0 +1,63 @@
+name: Symbolize dyld cache addresses
+
+# Mounts the pinned 20H392 IPSW's OS and Cryptex images read-only, locates the
+# arm64e dyld shared cache, and resolves unslid crash PCs (PC - cache_slide as
+# the on-device reporter prints them) to their image and nearest export.
+# Read-only against the IPSW; produces log output only.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pcs:
+        description: "Unslid PCs to resolve, whitespace separated"
+        type: string
+        default: "0x1d3c3da4c"
+
+permissions:
+  contents: read
+
+jobs:
+  symbolize:
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      PICASSO_IPSW_FILE: iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw
+      PICASSO_IPSW_URL: https://updates.cdn-apple.com/2025FallFCS/fullrestores/122-77006/1158E502-D76D-4226-AA06-ED5E30CD1111/iPhone10,3,iPhone10,6_16.7.16_20H392_Restore.ipsw
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the target IPSW
+        run: |
+          mkdir -p out/ipsw
+          IPSW="out/ipsw/$PICASSO_IPSW_FILE"
+          HOST=updates.cdn-apple.com
+          if [ ! -s "$IPSW" ]; then
+            if ! curl -L --fail --retry 3 --retry-all-errors --connect-timeout 30 -o "$IPSW" "$PICASSO_IPSW_URL"; then
+              IP=$(curl -s -H 'accept: application/dns-json' "https://cloudflare-dns.com/dns-query?name=$HOST&type=A" \
+                    | python3 -c "import sys,json; d=json.load(sys.stdin); print(next(a['data'] for a in d.get('Answer',[]) if a['type']==1))")
+              echo "runner DNS failed; pinning $HOST to $IP"
+              curl -L --fail --retry 5 --retry-all-errors --connect-timeout 30 \
+                --resolve "$HOST:443:$IP" -o "$IPSW" "$PICASSO_IPSW_URL"
+            fi
+          fi
+          ls -lh "$IPSW"
+
+      - name: Extract and mount the OS images
+        run: |
+          cd out/ipsw
+          unzip -o "$PICASSO_IPSW_FILE" "087-86698-044.dmg" "087-86593-047.dmg"
+          for d in 087-86698-044.dmg 087-86593-047.dmg; do
+            hdiutil attach -readonly -nobrowse -mountpoint "/tmp/sys-$d" "$d" || true
+          done
+          find /tmp/sys-* -name 'dyld_shared_cache_arm64e*' -o -name 'dyld_shared_cache*' | head -20
+
+      - name: Resolve the addresses
+        run: |
+          CACHE=$(find /tmp/sys-* -name 'dyld_shared_cache_arm64e' -type f | head -1)
+          echo "cache: $CACHE"
+          python3 scripts/symbolize-dyld-cache.py "$CACHE" ${{ github.event.inputs.pcs }}
+
+      - name: Detach
+        if: always()
+        run: |
+          for m in /tmp/sys-*; do hdiutil detach "$m" -force || true; done
