@@ -190,7 +190,7 @@ jobs:
       - name: Stage WCN3990 WLAN firmware
         run: |
           mkdir -p /tmp/picasso-wlan-fw
-          curl --fail --retry 3 --retry-all-errors --connect-timeout 30 \
+          curl -L --fail --retry 3 --retry-all-errors --connect-timeout 30 \
             -o /tmp/picasso-wlan-fw/wlanmdsp.mbn \
             https://github.com/ahu865/UniXNU-picasso-ci/releases/download/picasso-wlan-fw-vangogh-1/wlanmdsp.mbn
           ADRENO620_FW_DIR=/tmp/picasso-wlan-fw python3 scripts/verify-adreno-fw.py wlanmdsp.mbn 3871128 f9a10c48

@@ -83,3 +83,39 @@ thermal, haptics, torch, and audio. The upstream `power/`, `haptic/`, `camera/` 
 drivers are written for redwood's PMICs and codecs, so they are templates for structure, not
 drop-ins; each needs this phone's register map, the way `NativeBoardButtons` needed the PON
 and GPIO blocks read out of `picasso.dtb`.
+
+## Boot 13 update (2026-11-06): firmware located, first staged step done
+
+The firmware is not missing after all. The vangogh modem partition image in the
+local ROM directory (`NON-HLOS.bin`, FAT16) carries it:
+
+* `image/wlanmdsp.mbn` — 3 871 128 bytes, sha256 38e67bd7…, the WCN3990 WLAN
+  firmware image the ICNSS/WLFW flow downloads into the MSA region;
+* `image/bdwlan.bXX` — board data per board id, plus `image/regdb.bin`.
+
+No public blob repo mirrors `firmware_mnt/image`, so the two files are pinned
+as release assets of the CI repository (tag `picasso-wlan-fw-vangogh-1`) and
+the workflow stages + verifies them like the Adreno set. Stage 3 of
+`NativeWlan` now parses the real image against the ELF/MBN parser.
+
+What stage 3 is and is not: it validates the container and publishes the
+WLFW/QMI handshake plan; the load step still reports ENOTSUP (no SCM call, no
+QMI/GLINK client) and stage 5 stops at the honest blocker — there is no
+IO80211 stack. The port order from here, following the upstream redwood
+method (drivers/wifi/hakios.wifi.c, WCN6750, steps 1–16: survey SMEM/SMP2P/
+IPCC/RPMh rails, load the signed image, bring up GLINK/QRTR, talk WLFW):
+
+1. MSA/WLFW download of wlanmdsp.mbn (our probe already computed the MSA plan
+   and the transport is SNOC — closer to ath11k's WLFW than to ath10k).
+2. GLINK/QRTR + WLFW service conversation (port from hakios.wifi.c/wlfw).
+3. BMI/HTT/WMI against the running firmware.
+4. An IO80211 replacement — the part upstream has not finished either; even
+   redwood's driver reaches "firmware in mission mode, radio registers
+   readable", not an associated connection.
+
+Bluetooth: `BTFM.bin` carries `crbtfw32.tlv` + `crnv32.bin` (the WCN3990 UART
+rampatch and NVM pair), extracted alongside the WLAN image when needed.
+
+Audio: no codec driver exists in this tree at all — the WCD9385 chain
+(SoundWire/SLIMbus + va/rx/tx macros) has not been started; volume key events
+reach the HID layer, but sound output has nothing to reach yet.
