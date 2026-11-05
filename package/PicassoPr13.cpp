@@ -12,9 +12,9 @@ void native_wlan_probe(void);
 void sheng_cpufreq_probe(void);
 void sheng_cpufreq_poll(void);
 void picasso_pr13_start(void);
-// No WLAN firmware is supplied by PR13. Stage 3 reports its absence.
-extern const uint8_t native_wlan_firmware[1] = {0};
-extern const uint32_t native_wlan_firmware_size = 0;
+// WLAN firmware is supplied by the generated wlan_embedded_firmware.c
+// (scripts/build-wlan-picasso-firmware.py); if it were absent, the probe's
+// weak-import references would resolve to null and stage 3 reports it.
 volatile uint32_t native_legacy_gpu_fallbacks, native_legacy_gpu_last_status;
 volatile uint64_t native_legacy_early_retires, native_legacy_early_failures;
 void native_legacy_swap_stage(unsigned stage) { (void)stage; }
