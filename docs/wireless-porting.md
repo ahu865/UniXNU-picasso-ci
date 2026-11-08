@@ -156,3 +156,52 @@ What each of the two answers means for the next build:
   uploaded by `ath10k`'s BMI over a copy engine, and the next work is the CE
   ring setup (the transport stage already says the block is integrated SNOC/CE)
   rather than the PIL calls.
+
+## What the probe answered on the phone (boot 16)
+
+The calls reach TrustZone, and TrustZone answers with its own codes — that part
+is settled: `smc 0x42000201`, argument descriptor `0x82` (one value, one buffer),
+`x2` the id, `x3` the header's physical address. Per id, from the boot log:
+
+```
+id 2..17   init_image -> -3145797  (0x300045)
+id 18..22  init_image -> -3145738  (0x30000A)
+id 1, 4, 13 skipped (lpass, mss, kgsl-hyp: named by the tree as other subsystems)
+probe done, tried=20 accepted=0 id=0
+```
+
+Nothing accepted the image. Two readings, and the second is the one the rest of
+the tree supports:
+
+1. the metadata was too small — `init_image` was given the first 4 KiB only;
+2. this firmware is not loaded through PAS at all.
+
+The image itself says (2): parsing `wlanmdsp.mbn` as the ELF32 it actually is
+(`\x7fELF`, `e_phnum = 7`, `e_phoff = 0x34`) shows the hash segment as
+`ph0 PT_NULL off=0 filesz=276`, then three `PT_LOAD`s at `0xb0000000`,
+`0xb0300000`, `0xb0781000`, a `PT_DYNAMIC` nested in the second load and a
+46-byte `PT_NOTE` nested in the third — exactly the nesting that made the
+stage-3 overlap check fail before `00efc51`. So the image *is* an authenticatable
+PIL image and it *does* carry a hash segment, yet every id refuses it, while the
+ids that do not exist answer with a different code. A valid image offered to the
+wrong subsystem fails; a valid image offered to *no* subsystem fails the same way
+for all of them. Combined with the device tree having no WLAN PAS node, the
+`qcom,icnss` node carrying a fixed MSA region instead, and the 248 MB
+`modem_wlan_region` next to `qmi-tmd-devices/modem/modem_wlan`, the conclusion is
+that on this SoC the WLAN image is uploaded and authenticated by the modem side,
+not by a PAS id of its own.
+
+What that leaves as the real WLAN path (ath10k's, for exactly this part):
+
+1. `ath10k_bmi_start()` — the WCSS's block-memory interface, reached through a
+   copy engine, not through PAS;
+2. `ath10k_bmi_fast_download()` of the 3.87 MB image into `wlan_fw_region`;
+3. QMI WLFW (the `requires QMI` layer in the reference port) to bring the
+   radio up, then HTT/WMI;
+4. an IO80211 replacement for Darwin's `wifid` (the reference port's
+   `hakios.wlan.cpp` + `apple80211.c` show the shape; that part is chip-neutral).
+
+The CE/BMI step needs the copy-engine register layout (12 engines, per
+`CE_COUNT_MAX`, with the pipe map in the WCSS window), which this driver does not
+have yet — that is the next piece of work, and it is independent of the PAS calls
+that now exist.
