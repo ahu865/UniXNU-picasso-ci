@@ -119,3 +119,40 @@ rampatch and NVM pair), extracted alongside the WLAN image when needed.
 Audio: no codec driver exists in this tree at all — the WCD9385 chain
 (SoundWire/SLIMbus + va/rx/tx macros) has not been started; volume key events
 reach the HID layer, but sound output has nothing to reach yet.
+
+## The secure-monitor call, and what it answered about the id
+
+Stage 3's ENOTSUP was a gap in this tree, not in the firmware: PIL's four calls
+(`svc 0x02`, `cmd 1 init_image / 2 mem_setup / 5 auth_and_reset / 6 shutdown`)
+are now in `drivers/NativeWlan/WlanScm.cpp`, in the interruptible convention
+`qcom_scm-smc.c` uses, with the image's header in one physically contiguous
+page (`IOMallocContiguous`), because TrustZone reads it by physical address.
+
+The open question was which peripheral id owns the WLAN. This board's device
+tree answers it by omission: `qcom,pas-id` exists for `mss=4`, `lpass=1`,
+`turing=18`, `venus=9`, `ipa_fw=15`, `npu=23` and `kgsl-hyp=13`, and the
+`qcom,icnss@18800000` node carries `qcom,wlan-msa-fixed-region` (phandle to
+`wlan_fw_region@8b500000`, 2 MB) instead — there is no WLAN PAS node at all.
+On this SoC the WLAN is a child of the modem subsystem, which is also why the
+`modem_wlan_region@8c000000` (248 MB) and `qmi-tmd-devices/modem/modem_wlan`
+nodes exist.
+
+`init_image` is the one call that can be made while that is unknown: it uploads
+the image's header and starts nothing. So `sheng-wlan-pas=1` walks the ids
+2..23 (skipping 1, 4 and 13, which the tree names as other subsystems) and
+reports, per id, what TrustZone answered. A wrong id returns an error and the
+phone is untouched; the boot report gains `native_wlan_pas_answers[24]`.
+`sheng-wlan-pas=2` would additionally hand the accepted id
+`WLAN_MSA_BASE/WLAN_MSA_SIZE` and let it authenticate — deliberately not on in
+the test build, because the MSA region is 2 MB and the image's payload is
+3.25 MB, which is the first sign that this firmware may not be loaded through
+PAS at all but through the CE/BMI path ath10k uses for WCN3990.
+
+What each of the two answers means for the next build:
+
+- an id accepts the image: continue with `mem_setup` + `auth_and_reset`, then
+  GLINK/QRTR against whatever came up;
+- no id accepts it, or the id that does is the modem's: the WLAN firmware is
+  uploaded by `ath10k`'s BMI over a copy engine, and the next work is the CE
+  ring setup (the transport stage already says the block is integrated SNOC/CE)
+  rather than the PIL calls.
