@@ -303,6 +303,9 @@ kernel_args = [
   # called: it uploads the image's header and starts nothing, so a wrong id answers with an error and the phone
   # is left as it was. The id that answers is what the load in stage 3 needs.
   "sheng-wlan-pas=1",
+  # Read-only GPT reconnaissance for the audio port's missing input: list every LUN-0 partition, locate
+  # adsp_a/adsp_b and parse the ELF32 program headers of the ADSP image. No load, no authentication.
+  "sheng-adsp=1",
   # PMIC buttons: inventory the arbiter, then poll the power-on blocks and the pulled-up key GPIO every 16 ms.
   # Read-only on the PMICs; the only write is the arbiter's read command word.
   "sheng-buttons=2",

@@ -1168,6 +1168,182 @@ static uint32_t be32w (const uint8_t *at)
 
 }
 
+// ---- Named-partition reads (sheng-adsp and later firmware dumps) ----------------------------------------------
+// Read-only access to any LUN-0 partition by GPT name, for probing firmware partitions
+// (adsp_a) the way the userdata layout probe reads its own. Reads never write; the caller
+// supplies the buffer and the bounds are the partition's own GPT bounds.
+extern "C" int native_ufs_partition_read (const char *name, uint64_t offset, uint32_t bytes, void *dst,
+                                          uint64_t *partitionFirstLba, uint64_t *partitionBlocks)
+{
+  if (!name || !dst || partitionFirstLba == nullptr || partitionBlocks == nullptr) return kIOReturnBadArgument;
+  *partitionFirstLba = 0;
+  *partitionBlocks = 0;
+  if (!gHost.ready || gHost.poisoned || !gHost.lock) return kIOReturnNotReady;
+
+  uint8_t header[4096];
+  if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) return kIOReturnIOError;
+  if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) return kIOReturnIOError;
+  const uint32_t entryCount = le32 (header + 82);
+  const uint32_t entrySize = le32 (header + 84);
+  const uint64_t entriesLba = le64 (header + 72);
+  if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) return kIOReturnIOError;
+
+  // GPT names are UTF-16LE; the names this port looks for are ASCII.
+  size_t nameLength = strlen (name);
+  if (!nameLength || nameLength > 36) return kIOReturnBadArgument;
+
+  bool found = false;
+  uint64_t first = 0, last = 0;
+  for (uint32_t e = 0; e < entryCount && !found; ++e) {
+    const uint64_t entryLba = entriesLba + (static_cast<uint64_t> (e) * entrySize) / 4096;
+    const uint32_t entryOff = static_cast<uint32_t> ((static_cast<uint64_t> (e) * entrySize) % 4096);
+    if (entryOff + entrySize > 4096) {
+      // Entries never straddle sectors in practice; skip rather than stitch.
+      continue;
+    }
+    if (hostRead4k (0, entryLba, 1, header) != kIOReturnSuccess) return kIOReturnIOError;
+    const uint8_t *entry = header + entryOff;
+    uint8_t used = 0;
+    for (unsigned i = 0; i < 16; ++i) used |= entry[i];
+    if (!used) continue;
+    bool match = true;
+    for (size_t i = 0; i < nameLength; ++i) {
+      const uint16_t ch = static_cast<uint16_t> (entry[128 + 2 * i]) |
+                          (static_cast<uint16_t> (entry[128 + 2 * i + 1]) << 8);
+      if (ch != static_cast<uint8_t> (name[i])) {
+        match = false;
+        break;
+      }
+    }
+    if (!match) continue;
+    first = le64 (entry + 32);
+    last = le64 (entry + 40);
+    found = true;
+  }
+  if (!found || !first || last < first) return kIOReturnNotFound;
+  *partitionFirstLba = first;
+  *partitionBlocks = last - first + 1;
+
+  const uint64_t partBytes = (last - first + 1) * 4096ULL;
+  if (offset > partBytes || bytes > partBytes - offset) return kIOReturnOverrun;
+  uint8_t *out = static_cast<uint8_t *> (dst);
+  uint64_t done = 0;
+  while (done < bytes) {
+    const uint64_t at = offset + done;
+    const uint64_t lba = first + at / 4096;
+    const uint32_t chunk = static_cast<uint32_t> (kDataMax < bytes - done ? kDataMax : bytes - done);
+    if (hostRead4k (0, lba, 1, gScratch) != kIOReturnSuccess) return kIOReturnIOError;
+    const uint32_t inBlock = static_cast<uint32_t> (at % 4096);
+    const uint32_t take = static_cast<uint32_t> (chunk > 4096 - inBlock ? 4096 - inBlock : chunk);
+    memcpy (out + done, gScratch + inBlock, take);
+    done += take;
+  }
+  return kIOReturnSuccess;
+}
+
+// ---- adsp firmware partition probe (sheng-adsp=1) ---------------------------------------------------------------
+// The audio port's only missing input is the ADSP image itself: the DT gives pas-id 1 and the 40 MiB
+// pil_adsp_region@88d00000, but adsp.mdt/adsp.b0x live in the adsp_a partition, not in any file this
+// tree carries. This probe is read-only GPT reconnaissance: list every partition name once (the map is
+// the evidence the next dump step needs), then locate adsp_a/adsp_b and parse the ELF32 program headers
+// of whatever image is there. Nothing is loaded, nothing is authenticated.
+static bool gAdspProbed = false;
+
+extern "C" int native_ufs_adsp_probe (void)
+{
+  uint32_t mode = 0;
+  if (!PE_parse_boot_argn ("sheng-adsp", &mode, sizeof (mode)) || !mode) return 0;
+  if (gAdspProbed) return 0;
+
+  uint8_t header[4096];
+  if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) return -1;
+  if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) return -2;
+  const uint32_t entryCount = le32 (header + 82);
+  const uint32_t entrySize = le32 (header + 84);
+  const uint64_t entriesLba = le64 (header + 72);
+  if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) return -3;
+
+  // One pass: print every name, remember the adsp images.
+  struct AdspImage { uint64_t first, last; char name[8]; };
+  AdspImage images[2];
+  unsigned imageCount = 0;
+  unsigned listed = 0;
+  for (uint32_t e = 0; e < entryCount; ++e) {
+    const uint64_t entryLba = entriesLba + (static_cast<uint64_t> (e) * entrySize) / 4096;
+    const uint32_t entryOff = static_cast<uint32_t> ((static_cast<uint64_t> (e) * entrySize) % 4096);
+    if (entryOff + entrySize > 4096) continue;
+    if (hostRead4k (0, entryLba, 1, header) != kIOReturnSuccess) return -4;
+    const uint8_t *entry = header + entryOff;
+    uint8_t used = 0;
+    for (unsigned i = 0; i < 16; ++i) used |= entry[i];
+    if (!used) continue;
+    char name[37];
+    unsigned n = 0;
+    for (; n < 36; ++n) {
+      const uint16_t ch = static_cast<uint16_t> (entry[128 + 2 * n]) |
+                          (static_cast<uint16_t> (entry[128 + 2 * n + 1]) << 8);
+      if (!ch) break;
+      name[n] = static_cast<char> (ch < 0x80 ? ch : '?');
+    }
+    name[n] = 0;
+    const uint64_t first = le64 (entry + 32), last = le64 (entry + 40);
+    if (listed < 40) {
+      IOLog ("NATIVE_UFS_GPT %s first=%llx last=%llx mib=%llu\n", name,
+             static_cast<unsigned long long> (first), static_cast<unsigned long long> (last),
+             static_cast<unsigned long long> ((last - first + 1) / 256));
+      ++listed;
+    }
+    if ((first && last >= first) && (n == 6 || n == 7) &&
+        (!strncmp (name, "adsp_a", 6) || !strncmp (name, "adsp_b", 6)) &&
+        (name[6] == '_' || name[6] == 0) && imageCount < 2) {
+      images[imageCount].first = first;
+      images[imageCount].last = last;
+      strncpy (images[imageCount].name, name, sizeof (images[imageCount].name) - 1);
+      images[imageCount].name[sizeof (images[imageCount].name) - 1] = 0;
+      ++imageCount;
+    }
+  }
+
+  for (unsigned i = 0; i < imageCount; ++i) {
+    uint8_t image[512];
+    if (hostRead4k (0, images[i].first, 1, image) != kIOReturnSuccess) {
+      IOLog ("NATIVE_UFS_ADSP %s first-block read failed\n", images[i].name);
+      continue;
+    }
+    // MBN images are ELF32 with a program-header segment table (ph0 PT_NULL carries the signature
+    // and hash table, as wlanmdsp.mbn already showed on this phone).
+    if (image[0] != 0x7f || image[1] != 'E' || image[2] != 'L' || image[3] != 'F' || image[4] != 1) {
+      IOLog ("NATIVE_UFS_ADSP %s not ELF32 (magic %02x %02x %02x %02x class %u)\n", images[i].name,
+             image[0], image[1], image[2], image[3], image[4]);
+      continue;
+    }
+    const uint32_t phoff = le32 (image + 0x1c);
+    const uint16_t phentsize = static_cast<uint16_t> (image[0x2a]) |
+                               (static_cast<uint16_t> (image[0x2b]) << 8);
+    const uint16_t phnum = static_cast<uint16_t> (image[0x2c]) |
+                           (static_cast<uint16_t> (image[0x2d]) << 8);
+    IOLog ("NATIVE_UFS_ADSP %s first=%llx mib=%llu phoff=%x phnum=%u phentsize=%u\n", images[i].name,
+           static_cast<unsigned long long> (images[i].first),
+           static_cast<unsigned long long> ((images[i].last - images[i].first + 1) / 256),
+           phoff, phnum, phentsize);
+    // A one-block read only shows what fits; the segment table may live beyond 512 bytes.
+    if (!phnum || phnum > 24 || phentsize != 32) continue;
+    const uint32_t tableEnd = phoff + static_cast<uint32_t> (phnum) * 32;
+    if (tableEnd > 4096) {
+      IOLog ("NATIVE_UFS_ADSP %s segment table spans %u bytes past 512; re-read with the full header "
+             "in the next step\n", images[i].name, tableEnd);
+      continue;
+    }
+    for (uint16_t s = 0; s < phnum; ++s) {
+      const uint8_t *ph = image + phoff + static_cast<uint32_t> (s) * 32;
+      IOLog ("NATIVE_UFS_ADSP %s seg%u type=%u off=%x pa=%08x filesz=%u memsz=%u\n", images[i].name, s,
+             le32 (ph), le32 (ph + 4), le32 (ph + 12), le32 (ph + 16), le32 (ph + 20));
+    }
+  }
+  gAdspProbed = true;
+  return 1;
+}
+
 // ---- Persistent Data store window (sheng-data-persist) ----------------------------------------------------------
 // The only part of this driver that ever writes. The consumer (NativeRamBlock's overlay) asks for a window of the given
 // size at the END of the userdata partition. Mode 1 (boot argument sheng-data-persist=1) only reads: it proves the window and

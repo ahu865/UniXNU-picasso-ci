@@ -1,0 +1,29 @@
+diff --git a/osfmk/vm/vm_compressor_backing_store.c b/osfmk/vm/vm_compressor_backing_store.c
+--- a/osfmk/vm/vm_compressor_backing_store.c
++++ b/osfmk/vm/vm_compressor_backing_store.c
+@@ -783,8 +783,25 @@ vm_swapfile_create_thread(void)
+ 	while (TRUE) {
++		/* picasso: the Data volume mounts after this thread's first attempt (the swap-file
++		 * open answers EROFS while the boot root is still read-only), and with no swap file
++		 * at all the compressor never reaches the "out of segments" path that wakes this
++		 * thread again. With zero swap files, wait out the create delay and retry instead
++		 * of parking until something else signals vm_swapfile_create_needed. */
++		if (vm_num_swap_files == 0 && vm_swapfile_last_failed_to_create_ts != 0) {
++			lck_mtx_lock(&vm_swap_data_lock);
++			if (vm_num_swap_files == 0 && hibernate_in_progress_with_pinned_swap == FALSE &&
++			    compressor_store_stop_compaction == FALSE) {
++				assert_wait_timeout((event_t)&vm_swapfile_create_needed, THREAD_INTERRUPTIBLE,
++				    VM_SWAPFILE_DELAYED_CREATE, NSEC_PER_SEC);
++				lck_mtx_unlock(&vm_swap_data_lock);
++				thread_block(THREAD_CONTINUE_NULL);
++				continue;
++			}
++			lck_mtx_unlock(&vm_swap_data_lock);
++		}
+ 		/*
+ 		 * walk through the list of swap files
+ 		 * and do the delayed frees/trims for
+ 		 * any swap file whose count of delayed
+ 		 * frees is above the batch limit
+ 		 */
+ 		vm_swap_handle_delayed_trims(FALSE);

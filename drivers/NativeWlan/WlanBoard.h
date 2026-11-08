@@ -87,6 +87,33 @@ enum wlan_transport {
 #define WLAN_MODEM_WLAN_BASE 0x8b800000ULL
 #define WLAN_MODEM_WLAN_SIZE 0xf800000ULL
 
+// Copy engines. ath10k's WCN3990 register table (drivers/net/wireless/ath/ath10k/hw.c wcn3990_regs and
+// wcn3990_ce_regs): the twelve CE register blocks sit 0x1000 apart from CE0 at 0x240000 inside the icnss
+// register window, the CE wrapper at 0x24c000, and every engine answers the same per-block layout:
+//   +0x00 src ring base lo, +0x04 hi, +0x08 src size, +0x0c dst ring base lo, +0x10 hi, +0x14 dst size,
+//   +0x18 ctrl1, +0x2c host_ie, +0x30 wm, +0x34 misc_ie, +0x3c sr_wr_index, +0x40 dst_wr_index,
+//   +0x44 current_srri, +0x48 current_drri; wrapper +0x04/+0x08 is the CE destination-ring index pair.
+// These are read-only in this tree. Like the stage-1 identity window, reading them before anything has
+// voted the rails/clocks can hang the MMIO bus on this board, so WlanProbe gates them behind
+// sheng-wlan-ce-read=1 instead of reading by default.
+#define WLAN_CE_COUNT 12
+#define WLAN_CE0_OFFSET 0x240000U
+#define WLAN_CE_STRIDE 0x1000U
+#define WLAN_CE_WRAPPER_OFFSET 0x24c000U
+#define WLAN_CE_SR_BASE_LO 0x00
+#define WLAN_CE_SR_BASE_HI 0x04
+#define WLAN_CE_SR_SIZE 0x08
+#define WLAN_CE_DR_BASE_LO 0x0c
+#define WLAN_CE_DR_BASE_HI 0x10
+#define WLAN_CE_DR_SIZE 0x14
+#define WLAN_CE_CTRL1 0x18
+#define WLAN_CE_SR_WR_INDEX 0x3c
+#define WLAN_CE_DST_WR_INDEX 0x40
+#define WLAN_CE_CURRENT_SRRI 0x44
+#define WLAN_CE_CURRENT_DRRI 0x48
+#define WLAN_CE_WRAPPER_RRI_LOW 0x04
+#define WLAN_CE_WRAPPER_RRI_HIGH 0x08
+
 // IRQs. interrupts = <0 0x19e 4, 0 0x19f 4, ... 0 0x1a9 4> on the vangogh icnss node: twelve consecutive GIC_SPI
 // lines, all level high. These are the raw SPI numbers (INTID = 32 + SPI). The DT gives no interrupt-names for icnss.
 // (The picasso tree lists 0x84, 0x51, 0x19f..0x1a1, 0x56, 0x5e, 0x60, 0x52, 0x77, 0x78, 0x57 instead, which is a

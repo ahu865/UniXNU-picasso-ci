@@ -12,6 +12,9 @@ void native_wlan_probe(void);
 void sheng_cpufreq_probe(void);
 void sheng_cpufreq_poll(void);
 void picasso_pr13_start(void);
+// Read-only GPT reconnaissance of the adsp_a/adsp_b firmware partitions (NativeUfs). Retried while
+// the UFS host is still coming up; off unless sheng-adsp=<n> is set.
+int native_ufs_adsp_probe(void) __attribute__((weak_import));
 // WLAN firmware is supplied by the generated wlan_embedded_firmware.c
 // (scripts/build-wlan-picasso-firmware.py); if it were absent, the probe's
 // weak-import references would resolve to null and stage 3 reports it.
@@ -30,6 +33,16 @@ static void probes(void *, wait_result_t) {
     native_adreno_probe();
     native_wlan_probe();
     bool reported = false;
+    unsigned adspAttempts = 0;
+    for (;;) {
+        sheng_cpufreq_poll();
+        // The UFS host is ready long before the scheduler gets here, but keep the retry bounded in
+        // case the probe thread races the bring-up on a cold boot.
+        if (native_ufs_adsp_probe && adspAttempts < 10) {
+            ++adspAttempts;
+            const int adsp = native_ufs_adsp_probe();
+            if (adsp >= 0) adspAttempts = 10;  // off, done, or refused: stop asking
+        }
     for (;;) {
         sheng_cpufreq_poll();
         const ml_topology_info_t *topology = ml_get_topology_info();

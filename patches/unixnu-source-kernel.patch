@@ -4418,7 +4418,7 @@ new file mode 100644
 +
 + 	ipcEnter(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
 + 	if (uc2022) {
-+@@ -6748,12 +6900,56 @@
++@@ -6748,12 +6900,58 @@
 + 		ret = externalMethod(selector, args);
 + 	}
 + 	ipcExit(defaultLocking ? (defaultLockingSingleThreadExternalMethod ? kIPCLockWrite : kIPCLockRead) : kIPCLockNone);
@@ -4440,8 +4440,10 @@ new file mode 100644
 ++		PE_parse_boot_argn("picasso-fb-reject-off", &rejectOff, sizeof(rejectOff));
 ++		bool off = args->scalarInput[0] == 0;
 ++		ret = (rejectOff && off) ? kIOReturnUnsupported : kIOReturnSuccess;
-++		printf("PICASSO_FBUC power change to %llu -> ret=%x\n",
-++		    (unsigned long long)args->scalarInput[0], ret);
+++		char name[32] = "?";
+++		proc_name(proc_selfpid(), name, sizeof(name));
+++		printf("PICASSO_FBUC power change to %llu -> ret=%x pid=%u name=%s reject=%u\n",
+++		    (unsigned long long)args->scalarInput[0], ret, proc_selfpid(), name, rejectOff);
 ++	}
 ++	if (picassoFbTicket) {
 ++		printf("PICASSO_FBUC done=%u selector=%u ret=%x\n", picassoFbTicket, selector, ret);

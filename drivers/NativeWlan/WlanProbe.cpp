@@ -267,7 +267,12 @@ int stage3(void *ctx) {
 
 // Stage 4: transport. The evidence says integrated SNOC/CE, so there is no PCIe link to train and no SDIO
 // function to enumerate. Listing the conclusion explicitly keeps the absence of an attach from looking like a bug.
-int stage4(void *) {
+// With sheng-wlan-ce-read=1 the twelve copy-engine register blocks and the wrapper are read (never written):
+// every ring base it reports tells the BMI step whether the firmware's copy engines were configured by anyone,
+// and every zero pair is one engine the BMI downloader would own. Off by default, like the identity window:
+// reads before a rail vote can hang the MMIO bus on this board.
+int stage4(void *ctx) {
+    Session *s = static_cast<Session *>(ctx);
     native_wlan_step = 41;
     const int transport = wlan_transport_classify(1, 0, 0, 1);
     native_wlan_transport = static_cast<uint32_t>(transport);
@@ -275,6 +280,32 @@ int stage4(void *) {
     if (transport != WLAN_BOARD_TRANSPORT) return fail(41, WLAN_ERR_INVAL);
     printf("PICASSO_WLAN stage4 transport=%s attach=none (no PCIe node, no SDIO WLAN child; integrated WCSS/SNOC)\n",
            wlan_transport_name(transport));
+    native_wlan_step = 42;
+    unsigned ceRead = 0;
+    const bool ce = PE_parse_boot_argn("sheng-wlan-ce-read", &ceRead, sizeof ceRead) && ceRead;
+    if (ce && s->icnss.va) {
+        for (unsigned engine = 0; engine < WLAN_CE_COUNT; ++engine) {
+            const uint32_t base = WLAN_CE0_OFFSET + WLAN_CE_STRIDE * engine;
+            printf("PICASSO_WLAN ce%u sr=%08x:%08x sz=%08x dr=%08x:%08x sz=%08x ctrl1=%08x "
+                   "srwi=%08x drwi=%08x srri=%08x drri=%08x\n",
+                   engine,
+                   rd32(s->icnss.va, base + WLAN_CE_SR_BASE_LO), rd32(s->icnss.va, base + WLAN_CE_SR_BASE_HI),
+                   rd32(s->icnss.va, base + WLAN_CE_SR_SIZE),
+                   rd32(s->icnss.va, base + WLAN_CE_DR_BASE_LO), rd32(s->icnss.va, base + WLAN_CE_DR_BASE_HI),
+                   rd32(s->icnss.va, base + WLAN_CE_DR_SIZE),
+                   rd32(s->icnss.va, base + WLAN_CE_CTRL1),
+                   rd32(s->icnss.va, base + WLAN_CE_SR_WR_INDEX),
+                   rd32(s->icnss.va, base + WLAN_CE_DST_WR_INDEX),
+                   rd32(s->icnss.va, base + WLAN_CE_CURRENT_SRRI),
+                   rd32(s->icnss.va, base + WLAN_CE_CURRENT_DRRI));
+        }
+        printf("PICASSO_WLAN cewrap rri=%08x:%08x\n",
+               rd32(s->icnss.va, WLAN_CE_WRAPPER_OFFSET + WLAN_CE_WRAPPER_RRI_LOW),
+               rd32(s->icnss.va, WLAN_CE_WRAPPER_OFFSET + WLAN_CE_WRAPPER_RRI_HIGH));
+    } else if (!ce) {
+        printf("PICASSO_WLAN stage4 ce registers not read (sheng-wlan-ce-read=1 enables; reads before a rail "
+               "vote can hang the bus)\n");
+    }
     return 0;
 }
 
