@@ -299,10 +299,12 @@ kernel_args = [
   # WLAN probe stages 1-4: read the icnss/WCSS identity window, the apps-SMMU geometry for stream 0xc0,
   # the MBN plan and the transport conclusion. Read-only; nothing here writes the CNSS block.
   "sheng-wlan=4",
-  # Then ask TrustZone's peripheral authentication service which id takes the WLAN image. Only init_image is
-  # called: it uploads the image's header and starts nothing, so a wrong id answers with an error and the phone
-  # is left as it was. The id that answers is what the load in stage 3 needs.
-  "sheng-wlan-pas=1",
+  # Disabled by default. The PAS probe asked every id 2..23 on the phone and every one was rejected
+  # (accepted=0): WCN3990 is a child of the modem subsystem here, not a PAS peripheral of its own.
+  # It also made every boot panic at ~46 s: IOFreeContiguous() in the probe's cleanup took a
+  # non-sleepable RW lock with preemption enabled (symbolized wlan_pas_probe +0xfc). Both the freed
+  # page and the call are now gone; set to 1 only for an explicit one-off re-probe.
+  "sheng-wlan-pas=0",
   # Read-only GPT reconnaissance for the audio port's missing input: list every LUN-0 partition, locate
   # adsp_a/adsp_b and parse the ELF32 program headers of the ADSP image. No load, no authentication.
   "sheng-adsp=1",

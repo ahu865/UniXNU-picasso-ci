@@ -86,23 +86,35 @@ struct PasPage {
     uint64_t phys;
 };
 
+// Keep one page for the lifetime of the kernel. IOFreeContiguous() reaches
+// IOGeneralMemoryDescriptor::complete() -> upl_commit_range() ->
+// lck_rw_lock_exclusive() on a non-sleepable lock; from this boot-time probe
+// thread that panics with "Taking non-sleepable RW lock with preemption
+// enabled" (symbolized on boot-vangogh-ios12: wlan_pas_probe +0xfc). The PAS
+// probe runs at most twice per boot and needs only 4 KiB, so retaining the
+// page is strictly safer than resetting the phone 46 seconds into every boot.
+static void *gPasPageVirt = nullptr;
+static uint64_t gPasPagePhys = 0;
+
 static PasPage pasMetadata(const void *mbn, size_t size, size_t keep) {
     PasPage page = {nullptr, 0};
     if (keep > size) keep = size;
     if (keep > PAGE_SIZE) keep = PAGE_SIZE;
-    IOPhysicalAddress phys = 0;
-    void *virt = IOMallocContiguous(PAGE_SIZE, PAGE_SIZE, &phys);
-    if (!virt) return page;
-    memset(virt, 0, PAGE_SIZE);
-    memcpy(virt, mbn, keep);
-    page.virt = virt;
-    page.phys = phys;
+    if (!gPasPageVirt) {
+        IOPhysicalAddress phys = 0;
+        gPasPageVirt = IOMallocContiguous(PAGE_SIZE, PAGE_SIZE, &phys);
+        gPasPagePhys = phys;
+    }
+    if (!gPasPageVirt) return page;
+    memset(gPasPageVirt, 0, PAGE_SIZE);
+    memcpy(gPasPageVirt, mbn, keep);
+    page.virt = gPasPageVirt;
+    page.phys = gPasPagePhys;
     return page;
 }
 
 static void pasMetadataFree(PasPage &page) {
-    if (!page.virt) return;
-    IOFreeContiguous(page.virt, PAGE_SIZE);
+    // Deliberately does not call IOFreeContiguous(): see the comment above.
     page.virt = nullptr;
     page.phys = 0;
 }
