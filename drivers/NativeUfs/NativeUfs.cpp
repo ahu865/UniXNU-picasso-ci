@@ -1183,7 +1183,10 @@ extern "C" int native_ufs_partition_read (const char *name, uint64_t offset, uin
   uint8_t header[4096];
   if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) return kIOReturnIOError;
   if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) return kIOReturnIOError;
-  const uint32_t entryCount = le32 (header + 82);
+  // EFI GPT header: NumberOfPartitionEntries is at +80, SizeOfPartitionEntry at +84,
+  // PartitionEntryLBA at +72. Reading +82 splices the high half of the count with the
+  // low half of the entry size (128/128 -> 0x00800000), which rejects every table.
+  const uint32_t entryCount = le32 (header + 80);
   const uint32_t entrySize = le32 (header + 84);
   const uint64_t entriesLba = le64 (header + 72);
   if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) return kIOReturnIOError;
@@ -1265,7 +1268,8 @@ extern "C" int native_ufs_adsp_probe (void)
   uint8_t header[4096];
   if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) { if (gAdspPrints < 12) { IOLog ("NATIVE_UFS_ADSP GPT header read not ready yet (attempt %u)\n", gAdspPrints + 1); ++gAdspPrints; } return -1; }
   if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) { IOLog ("NATIVE_UFS_ADSP GPT header not EFI PART\n"); ++gAdspPrints; return -2; }
-  const uint32_t entryCount = le32 (header + 82);
+  // Same layout as native_ufs_partition_read: the count lives at +80, not +82.
+  const uint32_t entryCount = le32 (header + 80);
   const uint32_t entrySize = le32 (header + 84);
   const uint64_t entriesLba = le64 (header + 72);
   if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) { IOLog ("NATIVE_UFS_ADSP GPT geometry rejected count=%u size=%u\n", entryCount, entrySize); ++gAdspPrints; return -3; }
