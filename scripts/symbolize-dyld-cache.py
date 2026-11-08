@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Resolve unslid virtual addresses inside a (split) dyld shared cache.
 
-Usage: symbolize-dyld-cache.py <cache-file> <pc> [<pc> ...]
+Usage: symbolize-dyld-cache.py <cache-file> <pc> [<pc> ...] [--dump-image=PATH]
+
+With --dump-image the Mach-O image containing the first hit is written to PATH
+(raw bytes, unslid virtual address 0 at byte 0) so it can be disassembled
+offline; iOS shared-cache images usually have no export trie of their own.
 
 <cache-file> is the main file (dyld_shared_cache_arm64); the numbered
 sub-cache files beside it are opened automatically. The on-device crash
@@ -115,6 +119,25 @@ class Cache:
                     return mm[start:start + length]
         return None
 
+    def read_range(self, vmaddr, length):
+        """Read a range that may straddle more than one cache mapping."""
+        out = bytearray()
+        while length:
+            for addr, size, off, path in self.maps:
+                if addr <= vmaddr < addr + size:
+                    mm = self.files[path]
+                    start = off + (vmaddr - addr)
+                    take = min(length, addr + size - vmaddr, len(mm) - start)
+                    if take <= 0:
+                        return None
+                    out += mm[start:start + take]
+                    vmaddr += take
+                    length -= take
+                    break
+            else:
+                return None
+        return bytes(out)
+
     def close(self):
         for mm in self.files.values():
             mm.close()
@@ -151,7 +174,13 @@ def main():
     if len(sys.argv) < 3:
         raise SystemExit(__doc__)
     cache = Cache(sys.argv[1])
-    targets = [int(x, 0) for x in sys.argv[2:]]
+    targets, dump_path = [], None
+    for arg in sys.argv[2:]:
+        if arg.startswith('--dump-image='):
+            dump_path = arg.split('=', 1)[1]
+        else:
+            targets.append(int(arg, 0))
+    dumped = False
     print(f'cache: {len(cache.files)} file(s), {len(cache.maps)} mappings, {len(cache.images)} images')
     for pc in targets:
         hit = next((im for im in cache.images if im[1] and im[0] <= pc < im[0] + im[1]), None)
@@ -166,6 +195,13 @@ def main():
             continue
         addr, size, name = hit
         print(f'pc {pc:#x}: {name} (image {addr:#x}..{addr + size:#x}, +{pc - addr:#x} into it)')
+        if dump_path and not dumped:
+            blob = cache.read_range(addr, size)
+            if blob:
+                with open(dump_path, 'wb') as f:
+                    f.write(blob)
+                print(f'       dumped {len(blob)} bytes of {name} to {dump_path}')
+                dumped = True
         header = cache.read(addr, 4096)
         if not header:
             print('       (image header bytes not mapped by any cache file)')
