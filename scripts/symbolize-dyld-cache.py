@@ -44,7 +44,7 @@ class Cache:
         pattern = os.path.basename(path) + '.*'
         for sub in sorted(glob.glob(os.path.join(os.path.dirname(path), pattern))):
             self._open(sub)
-        self.images = self._parse_main_images()
+        self.images = self._scan_images()
 
     def _open(self, path):
         try:
@@ -64,20 +64,47 @@ class Cache:
             addr, size, off = struct.unpack_from('<QQQ', mm, mapping_offset + 32 * i)
             self.maps.append((addr, size, off, path))
 
-    def _parse_main_images(self):
-        # iOS 16 split caches keep the image list in the .symbols companion file;
-        # the main file's own list is empty there. Fall back to the main file.
-        source = next((p for p in sorted(self.files) if p.endswith('.symbols')), self.main)
-        mm = self.files[source]
-        _, _, images_offset, images_count = struct.unpack_from('<IIII', mm, 16)
-        images = []
-        for i in range(images_count):
-            base = images_offset + 32 * i
-            path_off, _mtime, _inode, _pad, addr, size = struct.unpack_from('<IiiiQQ', mm, base)
-            end = mm.index(b'\0', path_off)
-            name = mm[path_off:end].decode('utf-8', 'replace')
-            images.append((addr, size, name))
-        return images
+    @staticmethod
+    def _dylib_name(mm, pos, limit):
+        try:
+            ncmds = struct.unpack_from('<I', mm, pos + 16)[0]
+            p = pos + 32
+            for _ in range(min(ncmds, 256)):
+                cmd, cmdsize = struct.unpack_from('<II', mm, p)
+                if cmdsize < 8 or p + cmdsize > pos + limit:
+                    return None
+                if cmd in (0xd, 0x8000000d):  # LC_ID_DYLIB
+                    nameoff = struct.unpack_from('<I', mm, p + 8)[0]
+                    raw = bytes(mm[p + nameoff:p + cmdsize])
+                    return raw.split(b'\0', 1)[0].decode('utf-8', 'replace') or None
+                p += cmdsize
+        except (struct.error, IndexError, ValueError):
+            return None
+        return None
+
+    def _scan_images(self):
+        # iOS 16 split caches leave the header's old 32-bit imagesCountOld at zero:
+        # the real image table moved to a 64-bit field whose offset changes with
+        # the dyld version, which is why every earlier run reported "0 images".
+        # Do not guess that offset. Mach-O images in a cache start page-aligned,
+        # so walk each mapping, pick up every MH_MAGIC_64 header, take its
+        # LC_ID_DYLIB name, and derive the unslid VM address from its file offset.
+        found = []
+        for addr, size, off, path in self.maps:
+            mm = self.files[path]
+            end = min(off + size, len(mm))
+            pos = off
+            while pos + 32 <= end:
+                if struct.unpack_from('<I', mm, pos)[0] == 0xfeedfacf:
+                    name = self._dylib_name(mm, pos, min(end - pos, 1 << 20))
+                    if name:
+                        found.append([addr + (pos - off), 0, name])
+                pos += 4096
+        found.sort(key=lambda im: im[0])
+        for i, im in enumerate(found):
+            nxt = found[i + 1][0] if i + 1 < len(found) else im[0] + 0x100000
+            im[1] = max(nxt - im[0], 0x1000)
+        return [tuple(im) for im in found]
 
     def read(self, vmaddr, length):
         for addr, size, off, path in self.maps:
