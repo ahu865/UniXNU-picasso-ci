@@ -1211,8 +1211,12 @@ extern "C" int native_ufs_partition_read (const char *name, uint64_t offset, uin
     if (!used) continue;
     bool match = true;
     for (size_t i = 0; i < nameLength; ++i) {
-      const uint16_t ch = static_cast<uint16_t> (entry[128 + 2 * i]) |
-                          (static_cast<uint16_t> (entry[128 + 2 * i + 1]) << 8);
+      // GPT entry: type GUID 0..15, unique GUID 16..31, first/last LBA 32..47,
+      // attributes 48..55, then 36 UTF-16LE chars of name at 56..127. Reading
+      // +128 lands on the *next* entry's GUID, which is why every by-name read
+      // used to come back not-found.
+      const uint16_t ch = static_cast<uint16_t> (entry[56 + 2 * i]) |
+                          (static_cast<uint16_t> (entry[56 + 2 * i + 1]) << 8);
       if (ch != static_cast<uint8_t> (name[i])) {
         match = false;
         break;
@@ -1291,8 +1295,9 @@ extern "C" int native_ufs_adsp_probe (void)
     char name[37];
     unsigned n = 0;
     for (; n < 36; ++n) {
-      const uint16_t ch = static_cast<uint16_t> (entry[128 + 2 * n]) |
-                          (static_cast<uint16_t> (entry[128 + 2 * n + 1]) << 8);
+      // GPT names are UTF-16LE at +56, not +128 (which is the next entry's GUID).
+      const uint16_t ch = static_cast<uint16_t> (entry[56 + 2 * n]) |
+                          (static_cast<uint16_t> (entry[56 + 2 * n + 1]) << 8);
       if (!ch) break;
       name[n] = static_cast<char> (ch < 0x80 ? ch : '?');
     }
@@ -1316,7 +1321,9 @@ extern "C" int native_ufs_adsp_probe (void)
   }
 
   for (unsigned i = 0; i < imageCount; ++i) {
-    uint8_t image[512];
+    // hostRead4k always writes a full 4096-byte block; a 512-byte destination
+    // would smash the kernel stack as soon as adsp_a is actually found.
+    uint8_t image[4096];
     if (hostRead4k (0, images[i].first, 1, image) != kIOReturnSuccess) {
       IOLog ("NATIVE_UFS_ADSP %s first-block read failed\n", images[i].name);
       continue;
@@ -1337,12 +1344,12 @@ extern "C" int native_ufs_adsp_probe (void)
            static_cast<unsigned long long> (images[i].first),
            static_cast<unsigned long long> ((images[i].last - images[i].first + 1) / 256),
            phoff, phnum, phentsize);
-    // A one-block read only shows what fits; the segment table may live beyond 512 bytes.
+    // The one 4 KiB block we read is enough for the ELF header and its program headers.
     if (!phnum || phnum > 24 || phentsize != 32) continue;
     const uint32_t tableEnd = phoff + static_cast<uint32_t> (phnum) * 32;
-    if (tableEnd > 4096) {
-      IOLog ("NATIVE_UFS_ADSP %s segment table spans %u bytes past 512; re-read with the full header "
-             "in the next step\n", images[i].name, tableEnd);
+    if (tableEnd > sizeof (image)) {
+      IOLog ("NATIVE_UFS_ADSP %s segment table spans %u bytes past the first block; re-read with the "
+             "full header in the next step\n", images[i].name, tableEnd);
       continue;
     }
     for (uint16_t s = 0; s < phnum; ++s) {
