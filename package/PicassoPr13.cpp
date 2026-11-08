@@ -43,8 +43,6 @@ static void probes(void *, wait_result_t) {
             const int adsp = native_ufs_adsp_probe();
             if (adsp >= 0) adspAttempts = 10;  // off, done, or refused: stop asking
         }
-    for (;;) {
-        sheng_cpufreq_poll();
         const ml_topology_info_t *topology = ml_get_topology_info();
         if (!reported && topology) {
             const unsigned en = ml_get_cpu_number_type(CLUSTER_TYPE_E, true, true);
