@@ -36,12 +36,16 @@ static void probes(void *, wait_result_t) {
     unsigned adspAttempts = 0;
     for (;;) {
         sheng_cpufreq_poll();
-        // The UFS host is ready long before the scheduler gets here, but keep the retry bounded in
-        // case the probe thread races the bring-up on a cold boot.
-        if (native_ufs_adsp_probe && adspAttempts < 10) {
+        // The UFS host is ready long before the scheduler gets here, but the probe retries without
+        // a cap until it succeeds: every early answer is logged inside the probe itself.
+        if (native_ufs_adsp_probe && adspAttempts < 60) {
             ++adspAttempts;
             const int adsp = native_ufs_adsp_probe();
-            if (adsp >= 0) adspAttempts = 10;  // off, done, or refused: stop asking
+            if (adspAttempts == 1 || adspAttempts == 10) {
+                IOLog("PICASSO_PR13 adsp probe pointer=%p attempt=%u rc=%d\n", (void *)(uintptr_t)native_ufs_adsp_probe,
+                    adspAttempts, adsp);
+            }
+            if (adsp >= 0) adspAttempts = 60;  // off, done, or refused: stop asking
         }
         const ml_topology_info_t *topology = ml_get_topology_info();
         if (!reported && topology) {

@@ -1248,20 +1248,27 @@ extern "C" int native_ufs_partition_read (const char *name, uint64_t offset, uin
 // the evidence the next dump step needs), then locate adsp_a/adsp_b and parse the ELF32 program headers
 // of whatever image is there. Nothing is loaded, nothing is authenticated.
 static bool gAdspProbed = false;
+static unsigned gAdspPrints = 0;
 
+// The probes thread calls this once a second; the UFS host may still be coming up on the first
+// attempts, so every early answer is logged (bounded) instead of staying silent.
 extern "C" int native_ufs_adsp_probe (void)
 {
+  if (gAdspProbed) return 1;
   uint32_t mode = 0;
-  if (!PE_parse_boot_argn ("sheng-adsp", &mode, sizeof (mode)) || !mode) return 0;
-  if (gAdspProbed) return 0;
+  if (!PE_parse_boot_argn ("sheng-adsp", &mode, sizeof (mode))) {
+    if (gAdspPrints < 3) { IOLog ("NATIVE_UFS_ADSP boot argument sheng-adsp not present (attempt %u)\n", gAdspPrints + 1); ++gAdspPrints; }
+    return 0;
+  }
+  if (!mode) return 0;
 
   uint8_t header[4096];
-  if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) return -1;
-  if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) return -2;
+  if (hostRead4k (0, 1, 1, header) != kIOReturnSuccess) { if (gAdspPrints < 12) { IOLog ("NATIVE_UFS_ADSP GPT header read not ready yet (attempt %u)\n", gAdspPrints + 1); ++gAdspPrints; } return -1; }
+  if (le32 (header) != 0x20494645U || le32 (header + 4) != 0x54524150U) { IOLog ("NATIVE_UFS_ADSP GPT header not EFI PART\n"); ++gAdspPrints; return -2; }
   const uint32_t entryCount = le32 (header + 82);
   const uint32_t entrySize = le32 (header + 84);
   const uint64_t entriesLba = le64 (header + 72);
-  if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) return -3;
+  if (!entryCount || entryCount > 128 || entrySize < 128 || entrySize > 1024) { IOLog ("NATIVE_UFS_ADSP GPT geometry rejected count=%u size=%u\n", entryCount, entrySize); ++gAdspPrints; return -3; }
 
   // One pass: print every name, remember the adsp images.
   struct AdspImage { uint64_t first, last; char name[8]; };
