@@ -41,6 +41,15 @@ volatile int native_wlan_handshake_error;
 void native_wlan_set_firmware(const uint8_t *data, size_t size);
 void native_wlan_probe(void);
 
+// TrustZone's peripheral authentication service, in WlanScm.cpp: the step this tree did not have. Kept weak so
+// a build without that translation unit still links, and the probe then says so instead of failing to boot.
+int wlan_pas_probe(const void *mbn, size_t size, unsigned first, unsigned last) __attribute__((weak_import));
+int wlan_pas_load(const void *mbn, size_t size, unsigned id, uint64_t region, uint64_t regionSize)
+    __attribute__((weak_import));
+extern volatile uint32_t native_wlan_pas_id, native_wlan_pas_tried;
+extern volatile int32_t native_wlan_pas_error;
+extern volatile uint32_t native_wlan_pas_answers[24];
+
 // Firmware is supplied by the integrator (weak symbols or the setter); no vendor blob is stored in this tree.
 extern const uint8_t native_wlan_firmware[] __attribute__((weak_import));
 extern const uint32_t native_wlan_firmware_size __attribute__((weak_import));
@@ -187,8 +196,7 @@ int hsLoad(void *, const struct wlan_mbn *) {
     printf("PICASSO_WLAN stage3 PIL load unavailable: no SCM/TZ call in this tree and no wlan PIL node in "
            "picasso.dts (modem.mdt/modem_wlan_mem is the only staged modem image)\n");
     return WLAN_ERR_NOTSUP;
-}
-int hsRequest(void *, unsigned request, uint64_t, uint64_t) {
+}int hsRequest(void *, unsigned request, uint64_t, uint64_t) {
     printf("PICASSO_WLAN stage3 WLFW request %u skipped: no QMI/GLINK client\n", request);
     return WLAN_ERR_NOTSUP;
 }
@@ -226,6 +234,22 @@ int stage3(void *ctx) {
     native_wlan_fw_segments = mbn.segments;
     native_wlan_fw_hash = mbn.hash_index == WLAN_MBN_NO_HASH ? 0 : mbn.hash_count;
     native_wlan_fw_payload = static_cast<uint32_t>(mbn.payload_size);
+
+    // The step this tree was missing: ask TrustZone about the image. `sheng-wlan-pas=1` asks which peripheral
+    // authentication id accepts it (init_image only uploads the header; nothing is started); `=2` also hands
+    // that id the region and lets it check the signature and bring the subsystem out of reset.
+    unsigned pas = 0;
+    PE_parse_boot_argn("sheng-wlan-pas", &pas, sizeof(pas));
+    if (pas) {
+        native_wlan_step = 34;
+        if (&wlan_pas_probe) {
+            (void)wlan_pas_probe(firmware, size, 2, 23);
+            if (pas >= 2 && native_wlan_pas_id && &wlan_pas_load)
+                (void)wlan_pas_load(firmware, size, native_wlan_pas_id, WLAN_MSA_BASE, WLAN_MSA_SIZE);
+        } else {
+            printf("PICASSO_WLAN pas: this build has no WlanScm translation unit\n");
+        }
+    }
 
     native_wlan_step = 33;
     struct HandshakeContext hctx = {0};

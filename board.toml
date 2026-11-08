@@ -299,6 +299,10 @@ kernel_args = [
   # WLAN probe stages 1-4: read the icnss/WCSS identity window, the apps-SMMU geometry for stream 0xc0,
   # the MBN plan and the transport conclusion. Read-only; nothing here writes the CNSS block.
   "sheng-wlan=4",
+  # Then ask TrustZone's peripheral authentication service which id takes the WLAN image. Only init_image is
+  # called: it uploads the image's header and starts nothing, so a wrong id answers with an error and the phone
+  # is left as it was. The id that answers is what the load in stage 3 needs.
+  "sheng-wlan-pas=1",
   # PMIC buttons: inventory the arbiter, then poll the power-on blocks and the pulled-up key GPIO every 16 ms.
   # Read-only on the PMICs; the only write is the arbiter's read command word.
   "sheng-buttons=2",
