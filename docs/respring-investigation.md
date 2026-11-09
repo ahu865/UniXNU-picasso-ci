@@ -112,3 +112,56 @@ them are the ones the storage fault above explains.
 * fewer, or no, SpringBoard restarts while apps are opened. If restarts continue without an
   app launch in front of them, neither the injection nor the storage fault was the only
   trigger and the faulting frame has to be resolved against the on-device cache.
+
+## Later evidence: the crash is a bad surface descriptor (boot 14 / boot-vangogh-ios14)
+
+The boot-12 storage/AMFI explanation above is not the cause of the swipes-to-spinner
+behaviour the user still sees. Every later boot has a **repeating SpringBoard abort** with a
+fixed faulting PC and `ESR=92000007` (EL0 data-abort, translation fault).  Resolving
+`PC - cache_slide = 0x1d3c3da4c` against the on-device dyld shared cache gives
+`/usr/lib/libate.dylib +0xfa4c` (Apple's texture/image library, image at 0x1d3c2e000).
+The symbolization script now scans page-aligned `MH_MAGIC_64` headers instead of the dead
+`imagesCountOld` field and can export the image (`--dump-image`) for offline disassembly.
+
+Disassembly of that image (byte 0 = image base; the Mach-O header's own segment offsets
+point into the cache and must not be used on the exported file):
+
+```
+0xf9e8  mov  x19, x0           ; x0 = surface descriptor
+0xfa00  ldr  x8, [x20, #0x58]! ; x20 = x0 + 0x58
+0xfa04  ldr  x9, [x20, #0x10]  ; = [x0 + 0x68]  stride
+0xfa08  ldp  x11, x10, [x20,#-0x40]   ; x10 = [x0 + 0x20]  base
+0xfa0c  madd x28, x9, x1, x10  ; x28 = stride * row + base
+0xfa4c  ldr  q0, [x28]         <<< CRASH: read 16 bytes of source pixels
+```
+
+So SpringBoard dies reading the first row of a source surface whose base/stride came from
+a descriptor that was never valid. Captured registers show `x1=0` on the first abort, i.e.
+`x28` is just `[descriptor+0x20]`, an unmapped user address. This is consistent with the
+single `IOMFB: default_fb_surface: No Default FB Surface found` line per boot.
+
+FBUC telemetry from the newest boot (first 160 `IOMobileFramebuffer` calls):
+
+| call | count | result |
+| --- | --- | --- |
+| selector 6, `sin=3 sout=0` | 65 | 39 success, 26 `0xe00002d5` = `kIOReturnBusy` |
+| selector 5, `in=0x46c` | 30 | success; `swap 0x46c -> 0x508` re-laid 4 times |
+| selector 4 | 30 | success |
+| selector 8 (`CollectionsPoster`) | 13 | success |
+| selector 79 / 50 | 3 / 2 | `0xe00002c7` = `kIOReturnUnsupported` |
+| selector 12 (power change) | 3 | rejected only for power-off, `picasso-fb-reject-off=1` |
+
+**Ruled out:** `scripts/tests/picasso-ios16-surface-abi-host.cpp` explicitly tests the
+`structureOutputDescriptor` path and asserts the hook leaves it untouched, and it verifies
+`picasso_ios16_limits` / `picasso_ios16_lock` / `picasso_ios16_swap` byte-for-byte. The
+missing-conversion-on-descriptor theory is therefore wrong: that path is intentional.
+
+**Next hypothesis:** an iOS 16 backboardd is talking to a retained iPadOS 17
+IOMobileFramebuffer whose selector numbering differs; selectors 50 and 79 returning
+`kIOReturnUnsupported` are the visible symptom. The fix is a selector translation table
+(like the structure-size translation already in the hook), not another structure re-layout.
+
+boot-vangogh-ios14 (GPT name fix + PAS panic fix, `sheng-wlan-pas=0`) measured on the phone:
+0 `panic(cpu`, 0 PAS probe, 34 correctly named GPT partitions, 0 `GPT geometry rejected`,
+but **3 SpringBoard aborts by t=261 s** and 5 automatic swipe gestures — down from 8 in the
+previous boot, not fixed. The crash PC is unchanged (`PC - slide = 0x1d3c3da4c`).
