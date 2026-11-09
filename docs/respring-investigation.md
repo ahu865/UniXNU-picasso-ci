@@ -157,9 +157,12 @@ FBUC telemetry from the newest boot (first 160 `IOMobileFramebuffer` calls):
 missing-conversion-on-descriptor theory is therefore wrong: that path is intentional.
 
 **Next hypothesis:** an iOS 16 backboardd is talking to a retained iPadOS 17
-IOMobileFramebuffer whose selector numbering differs; selectors 50 and 79 returning
-`kIOReturnUnsupported` are the visible symptom. The fix is a selector translation table
-(like the structure-size translation already in the hook), not another structure re-layout.
+IOMobileFramebuffer whose selector numbering differs. A full boot of ios14 shows
+`ret=e00002c7` (`kIOReturnUnsupported`) across **twelve distinct selectors** —
+12, 22, 27, 29, 33, 50 (×2), 55, 57, 68, 79 (×3), 84 — not just 50/79. That is the
+signature of a selector-table mismatch, not of a few unsupported features. The fix is a
+selector translation table (like the structure-size translation already in the hook),
+not another structure re-layout.
 
 boot-vangogh-ios14 (GPT name fix + PAS panic fix, `sheng-wlan-pas=0`) measured on the phone:
 0 `panic(cpu`, 0 PAS probe, 34 correctly named GPT partitions, 0 `GPT geometry rejected`,
